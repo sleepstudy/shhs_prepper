@@ -4,6 +4,7 @@ import itertools
 from collections import namedtuple
 from xml.etree import ElementTree
 import math
+import csv
 import pyedflib
 
 
@@ -234,6 +235,7 @@ class Settings:
   population_size = 200
   interspersed = True
   patient_ids = []
+  dump_path = None
   
   
 def transform_to_dict(patient_eeg_info_generator, settings):
@@ -248,28 +250,38 @@ def transform_to_dict(patient_eeg_info_generator, settings):
     
     for eeg_index in range(0, eeg_data_len, settings.batch_size):
       eeg1_data, eeg2_data = zip(*eeg_data)
-      eeg1_data_tuples = [
-        ("eeg1_{0}".format(i), eeg)
-        for i, eeg, in enumerate(eeg1_data[eeg_index:eeg_index+settings.batch_size])
-      ]
-      eeg2_data_tuples = [
-        ("eeg2_{0}".format(i), eeg)
-        for i, eeg, in enumerate(eeg2_data[eeg_index:eeg_index+settings.batch_size])
-      ]
-      sleep_stage = [
+      
+      sleep_stages = [
         (
           "sleep_stage", 
           sleep_stages_data[
-            int(math.floor(i * sleepstage_per_sensor))
+            int(math.floor(eeg_index * sleepstage_per_sensor))
           ]
         )
       ]
       
       if interspersed:
-        yield eeg1_data_tuples + eeg2_data_tuples + sleep_stage
+        eeg1_data_tuples = [
+          ("eeg1_{0}".format(i), eeg)
+          for i, eeg, in enumerate(eeg1_data[eeg_index:eeg_index+settings.batch_size])
+        ]
+        eeg2_data_tuples = [
+          ("eeg2_{0}".format(i), eeg)
+          for i, eeg, in enumerate(eeg2_data[eeg_index:eeg_index+settings.batch_size])
+        ]
+        yield eeg1_data_tuples + eeg2_data_tuples + sleep_stages
       else:
-        yield eeg1_data_tuples + sleep_stage
-        yield eeg2_data_tuples + sleep_stage
+        eeg1_data_tuples = [
+          ("eeg_{0}".format(i), eeg)
+          for i, eeg, in enumerate(eeg1_data[eeg_index:eeg_index+settings.batch_size])
+        ]
+        yield eeg1_data_tuples + [("eeg_signal", "1")] + sleep_stages
+        
+        eeg2_data_tuples = [
+          ("eeg_{0}".format(i), eeg)
+          for i, eeg, in enumerate(eeg2_data[eeg_index:eeg_index+settings.batch_size])
+        ]
+        yield eeg2_data_tuples + [("eeg_signal", "2")] + sleep_stages
   
   def eeg_info_transformer(patient_eeg_info):
     iterables = []
@@ -348,11 +360,18 @@ def main():
     default='.', 
     help='Path to SHHS folder'
   )
+  parser.add_argument(
+    '--dump_path', 
+    type=str, 
+    default='./results.csv', 
+    help='Path to CSV result dump'
+  )
   
   parsed = parser.parse_args()
   
   settings = Settings()
   shhs_dir_path = os.path.abspath(parsed.path)
+  dump_path = os.path.abspath(parsed.dump_path)
   try:
     batch_size = int(parsed.batch_size)
     settings.batch_size = batch_size
@@ -368,6 +387,7 @@ def main():
   except ValueError:
     print("Population size invalid, using default of 200")
   settings.interspersed = parsed.interspersed
+  settings.dump_path = dump_path
   
   
   patient_info_generator, subject_ids = itertools.islice(
@@ -377,9 +397,28 @@ def main():
     ), 
     parsed.population_size
   )
-    
-  for patient_info in transform_to_dict(patient_info_generator, settings):
-    print(len(patient_info.keys()))
+  
+  column_names = ["subject_id", "in_cohort1", "in_cohort2", "cohort", "sleep_stage"]
+  if settings.interspersed:
+    column_names = column_names + [
+      "eeg1_{0}".format(i)
+      for i in range(settings.batch_size)
+    ] + [
+      "eeg2_{0}".format(i)
+      for i in range(settings.batch_size)
+    ]
+  else:
+    column_names = column_names + [
+      "eeg_{0}".format(i)
+      for i in range(settings.batch_size)
+    ] + ["eeg_signal"]
+  
+  with open(settings.dump_path, 'w+') as csvfile:
+    writer = csv.DictWriter(csvfile, fieldnames=column_names)
+    for patient_info in transform_to_dict(patient_info_generator, settings):
+      print("Inserted row into CSV")
+      writer.writeheader()
+      writer.writerow(patient_info)
 
   
 main()
