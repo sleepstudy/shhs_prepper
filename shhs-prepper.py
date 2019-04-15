@@ -64,15 +64,15 @@ def get_patient_info(shhs_dir_path):
     subject_id in subject_ids_cohort_2
   ) for subject_id in all_subject_ids]
   
-  def get_sleepstages(edf_file):
+  def get_sleepstages(xml_file):
     """
-    Given an EDF file, returns a list of sleep stage values, 
+    Given an XML file, returns a list of sleep stage values, 
     recorded in 30s intervals
     """
     return [
       sleep_stage_elem.text
       for sleep_stage_elem in ElementTree.parse(
-        edf_file
+        xml_file
       ).getroot().find('SleepStages')
     ]
   
@@ -110,15 +110,17 @@ def get_patient_info(shhs_dir_path):
 
     
 class PatientEEGInfo(PatientInfo):
-  # [(sensor1_val, sensor2_val)]
-  eeg_cohort_1_data = []
+  # Iterator[(sensor1_val, sensor2_val)]
+  eeg_cohort_1_data = iter([])
   eeg_cohort_1_sampling_frequency = (0, 0)
   eeg_cohort_1_present = False
+  eeg_cohort_1_len = 0
     
-  # [(sensor1_val, sensor2_val)]
-  eeg_cohort_2_data = []
+  # Iterator[(sensor1_val, sensor2_val)]
+  eeg_cohort_2_data = iter([])
   eeg_cohort_2_sampling_frequency = (0, 0)
-  eeg_cohort_2_present = False 
+  eeg_cohort_2_present = False
+  eeg_cohort_2_len = 0
     
   def __str__(self):
     return 'EEG Info: {subject_id}'.format(
@@ -158,12 +160,17 @@ def get_patient_eeg(shhs_dir_path, patient_info_generator, info_subject_ids):
   
   def eeg_from_edfreader(subject_id):
     """
-    Returns ((sensor1, sensor2), (freq1, freq2), [(sensor1, sensor2)], (freq1, freq2))
+    Returns (
+      [(sensor1, sensor2)], (freq1, freq2), len
+      [(sensor1, sensor2)], (freq1, freq2), len
+    )
     """
     cohort_1 = []
     cohort_1_freq = (0, 0)
+    cohort_1_len = 0
     cohort_2 = []
     cohort_2_freq = (0, 0)
+    cohort_2_len = 0
     
     if subject_id in subject_ids_cohort_1:
       with pyedflib.EdfReader(
@@ -176,14 +183,14 @@ def get_patient_eeg(shhs_dir_path, patient_info_generator, info_subject_ids):
           )
         )
       ) as reader_1:
-        cohort_1 = list(zip(
-          reader_1.readSignal(2).tolist(), 
-          reader_1.readSignal(7).tolist()
-        ))
+        signal_1 = reader_1.readSignal(2)
+        signal_2 = reader_1.readSignal(7)
+        cohort_1 = itertools.izip(signal_1, signal_2)
         cohort_1_freq = (
           reader_1.getSampleFrequency(2),
           reader_1.getSampleFrequency(7)
         )
+        cohort_1_len = min(signal_1.size, signal_2.size)
       
     if subject_id in subject_ids_cohort_2:
       with pyedflib.EdfReader(
@@ -196,16 +203,16 @@ def get_patient_eeg(shhs_dir_path, patient_info_generator, info_subject_ids):
           )
         )
       ) as reader_2:
-        cohort_2 = list(zip(
-          reader_2.readSignal(2).tolist(), 
-          reader_2.readSignal(7).tolist()
-        ))
+        signal_1 = reader_2.readSignal(2)
+        signal_2 = reader_2.readSignal(7)
+        cohort_2 = itertools.izip(signal_1, signal_2)
         cohort_2_freq = (
           reader_2.getSampleFrequency(2),
           reader_2.getSampleFrequency(7)
         )
+        cohort_2_len = min(signal_1.size, signal_2.size)
       
-    return cohort_1, cohort_1_freq, cohort_2, cohort_2_freq
+    return cohort_1, cohort_1_freq, cohort_1_len, cohort_2, cohort_2_freq, cohort_2_len
   
   def generator():
     for patient_info in patient_info_generator():
@@ -214,13 +221,15 @@ def get_patient_eeg(shhs_dir_path, patient_info_generator, info_subject_ids):
 
       patient_info.__class__= PatientEEGInfo
       
-      cohort1_data, cohort1_sf, cohort2_data, cohort2_sf = eeg_from_edfreader(
+      cohort1_data, cohort1_sf, cohort1_len, cohort2_data, cohort2_sf, cohort2_len = eeg_from_edfreader(
         patient_info.subject_id
       )
       patient_info.eeg_cohort_1_data = cohort1_data
       patient_info.eeg_cohort_1_sampling_frequency = cohort1_sf
+      patient_info.eeg_cohort_1_len = cohort1_len
       patient_info.eeg_cohort_2_data = cohort2_data
       patient_info.eeg_cohort_2_sampling_frequency = cohort2_sf
+      patient_info.eeg_cohort_2_len = cohort2_len
       
       patient_info.eeg_cohort_1_present = patient_info.subject_id in subject_ids_cohort_1
       patient_info.eeg_cohort_2_present = patient_info.subject_id in subject_ids_cohort_2
@@ -238,50 +247,49 @@ class Settings:
   dump_path = None
   
   
-def transform_to_dict(patient_eeg_info_generator, settings):
+def transform_to_dicts(settings, patient_eeg_info_generator):
   
-  def eeg_generator(eeg_data, sleep_stages_data, interspersed):
-    eeg_data_len = len(eeg_data)
-    sleepstage_len = len(sleep_stages_data)
+  def eeg_generator(eeg_data, sleep_stages_data, interspersed, batch_size, eeg_data_len):
     
-    sleepstage_per_sensor = sleepstage_len/ float(
+    sleepstage_per_sensor = len(sleep_stages_data) / float(
       eeg_data_len
     ) if float(eeg_data_len) > 0 else 0
     
-    for eeg_index in range(0, eeg_data_len, settings.batch_size):
-      eeg1_data, eeg2_data = zip(*eeg_data)
-      
-      sleep_stages = [
-        (
-          "sleep_stage", 
-          sleep_stages_data[
-            int(math.floor(eeg_index * sleepstage_per_sensor))
-          ]
-        )
+    eeg1_data, eeg2_data = itertools.tee(eeg_data, 2)
+    
+    for eeg_index in range(0, eeg_data_len, batch_size):
+      sleep_stage = sleep_stages_data[
+        int(math.floor(eeg_index * sleepstage_per_sensor))
       ]
       
       if interspersed:
-        eeg1_data_tuples = [
-          ("eeg1_{0}".format(i), eeg)
-          for i, eeg, in enumerate(eeg1_data[eeg_index:eeg_index+settings.batch_size])
-        ]
-        eeg2_data_tuples = [
-          ("eeg2_{0}".format(i), eeg)
-          for i, eeg, in enumerate(eeg2_data[eeg_index:eeg_index+settings.batch_size])
-        ]
-        yield eeg1_data_tuples + eeg2_data_tuples + sleep_stages
-      else:
-        eeg1_data_tuples = [
-          ("eeg_{0}".format(i), eeg)
-          for i, eeg, in enumerate(eeg1_data[eeg_index:eeg_index+settings.batch_size])
-        ]
-        yield eeg1_data_tuples + [("eeg_signal", "1")] + sleep_stages
+        row_dict = {
+          "eeg1_{0}".format(i): eeg
+          for i, eeg in enumerate(itertools.islice(eeg_data, batch_size))
+        }
+        row_dict.update({
+          "eeg2_{0}".format(i): eeg
+          for i, eeg, in enumerate(itertools.islice(eeg_data, batch_size))
+        })
+        row_dict["sleep_stage"] = sleep_stage
         
-        eeg2_data_tuples = [
-          ("eeg_{0}".format(i), eeg)
-          for i, eeg, in enumerate(eeg2_data[eeg_index:eeg_index+settings.batch_size])
-        ]
-        yield eeg2_data_tuples + [("eeg_signal", "2")] + sleep_stages
+        yield row_dict
+      else:
+        row_dict = {
+          "eeg_{0}".format(i): eeg
+          for i, eeg, in enumerate(itertools.islice(eeg_data, batch_size))
+        }
+        row_dict["eeg_signal"] = "1"
+        row_dict["sleep_stage"] = sleep_stage
+        yield row_dict.items()
+        
+        row_dict = {
+          "eeg_{0}".format(i): eeg
+          for i, eeg, in enumerate(itertools.islice(eeg_data, batch_size))
+        }
+        row_dict["eeg_signal"] = "2"
+        row_dict["sleep_stage"] = sleep_stage
+        yield row_dict.items()
   
   def eeg_info_transformer(patient_eeg_info):
     iterables = []
@@ -292,28 +300,61 @@ def transform_to_dict(patient_eeg_info_generator, settings):
     ]
     
     if patient_eeg_info.eeg_cohort_1_present:
-      dict_addons.append(("cohort", "1"))
+      iterables.append(itertools.imap(
+        lambda x: dict(x + dict_addons + [("cohort", "1")]), 
+        eeg_generator(
+          patient_eeg_info.eeg_cohort_1_data, 
+          patient_eeg_info.sleep_stages_cohort_1,
+          settings.interspersed,
+          settings.batch_size,
+          patient_eeg_info.eeg_cohort_1_len
+        )
+      ))
       
-      iterables.append(itertools.imap(lambda x: dict(x + dict_addons), eeg_generator(
-        patient_eeg_info.eeg_cohort_1_data, 
-        patient_eeg_info.sleep_stages_cohort_1, 
-        settings.interspersed
-      )))
-      
-    elif patient_eeg_info.eeg_cohort_2_present:
-      dict_addons.append(("cohort", "2"))
-      
-      iterables.append(itertools.imap(lambda x: dict(x + dict_addons), eeg_generator(
-        patient_eeg_info.eeg_cohort_2_data, 
-        patient_eeg_info.sleep_stages_cohort_2, 
-        settings.interspersed
-      )))
+    if patient_eeg_info.eeg_cohort_2_present:
+      iterables.append(itertools.imap(
+        lambda x: dict(x + dict_addons + [("cohort", "2")]), 
+        eeg_generator(
+          patient_eeg_info.eeg_cohort_2_data, 
+          patient_eeg_info.sleep_stages_cohort_2, 
+          settings.interspersed,
+          settings.batch_size,
+          patient_eeg_info.eeg_cohort_2_len
+        )
+      ))
       
     return itertools.chain.from_iterable(iterables)
   
   return itertools.chain.from_iterable(
     itertools.imap(eeg_info_transformer, patient_eeg_info_generator())
   )
+
+
+def profile(shhs_dir_path, settings):
+  import cProfile
+  import pstats
+  
+  pr = cProfile.Profile()
+  
+  pr.enable()
+  patient_info_generator, subject_ids = itertools.islice(
+    get_patient_eeg(
+      shhs_dir_path, 
+      *get_patient_info(shhs_dir_path)
+    ), 
+    100
+  )
+  iterator = itertools.islice(
+    transform_to_dicts(settings, patient_info_generator),
+    4
+  )
+  iterator.next()
+  iterator.next()
+  iterator.next()
+  iterator.next()
+  pr.disable()
+  
+  pstats.Stats(pr).sort_stats('cumulative').print_stats()
 
 
 def main():
@@ -366,6 +407,12 @@ def main():
     default='./results.csv', 
     help='Path to CSV result dump'
   )
+  parser.add_argument(
+    '--profile', 
+    default=False, 
+    action='store_true',
+    help='Profile mode?'
+  )
   
   parsed = parser.parse_args()
   
@@ -389,6 +436,9 @@ def main():
   settings.interspersed = parsed.interspersed
   settings.dump_path = dump_path
   
+  if parsed.profile:
+    profile(shhs_dir_path, settings)
+    return
   
   patient_info_generator, subject_ids = itertools.islice(
     get_patient_eeg(
@@ -415,9 +465,9 @@ def main():
   
   with open(settings.dump_path, 'w+') as csvfile:
     writer = csv.DictWriter(csvfile, fieldnames=column_names)
-    for patient_info in transform_to_dict(patient_info_generator, settings):
+    writer.writeheader()
+    for patient_info in transform_to_dicts(settings, patient_info_generator):
       print("Inserted row into CSV")
-      writer.writeheader()
       writer.writerow(patient_info)
 
   
