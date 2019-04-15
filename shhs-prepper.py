@@ -256,6 +256,8 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
     ) if float(eeg_data_len) > 0 else 0
     
     eeg1_data, eeg2_data = itertools.tee(eeg_data, 2)
+    eeg1_data = itertools.imap(lambda x: x[0], eeg1_data)
+    eeg2_data = itertools.imap(lambda x: x[1], eeg2_data)
     
     for eeg_index in range(0, eeg_data_len, batch_size):
       sleep_stage = sleep_stages_data[
@@ -265,11 +267,11 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
       if interspersed:
         row_dict = {
           "eeg1_{0}".format(i): eeg
-          for i, eeg in enumerate(itertools.islice(eeg_data, batch_size))
+          for i, eeg in enumerate(itertools.islice(eeg1_data, batch_size))
         }
         row_dict.update({
           "eeg2_{0}".format(i): eeg
-          for i, eeg, in enumerate(itertools.islice(eeg_data, batch_size))
+          for i, eeg, in enumerate(itertools.islice(eeg2_data, batch_size))
         })
         row_dict["sleep_stage"] = sleep_stage
         
@@ -277,7 +279,7 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
       else:
         row_dict = {
           "eeg_{0}".format(i): eeg
-          for i, eeg, in enumerate(itertools.islice(eeg_data, batch_size))
+          for i, eeg, in enumerate(itertools.islice(eeg1_data, batch_size))
         }
         row_dict["eeg_signal"] = "1"
         row_dict["sleep_stage"] = sleep_stage
@@ -285,7 +287,7 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
         
         row_dict = {
           "eeg_{0}".format(i): eeg
-          for i, eeg, in enumerate(itertools.islice(eeg_data, batch_size))
+          for i, eeg, in enumerate(itertools.islice(eeg2_data, batch_size))
         }
         row_dict["eeg_signal"] = "2"
         row_dict["sleep_stage"] = sleep_stage
