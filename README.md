@@ -2,6 +2,8 @@
 ETL tool for the National Sleep Research Resource SHHS dataset
 
 ## How to use
+To use, simply `pip install -r requirements.txt` and you may then use this Python script!
+
 To get configurable parameters available for you when using the script, simply run `python shhs-prepper.py --help`
 ```shell
 usage: shhs-prepper.py [-h] [--batch_size BATCH_SIZE]
