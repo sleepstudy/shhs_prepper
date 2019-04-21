@@ -250,6 +250,7 @@ class Settings:
 def transform_to_dicts(settings, patient_eeg_info_generator):
   
   def eeg_generator(eeg_data, sleep_stages_data, interspersed, batch_size, eeg_data_len):
+    sampling_seq = 0
     
     sleepstage_per_sensor = len(sleep_stages_data) / float(
       eeg_data_len
@@ -274,6 +275,9 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
           for i, eeg, in enumerate(itertools.islice(eeg2_data, batch_size))
         })
         row_dict["sleep_stage"] = sleep_stage
+        row_dict["sampling_seq"] = sampling_seq
+        
+        sampling_seq += 1
         
         yield row_dict
       else:
@@ -283,6 +287,10 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
         }
         row_dict["eeg_signal"] = "1"
         row_dict["sleep_stage"] = sleep_stage
+        row_dict["sampling_seq"] = sampling_seq
+        
+        sampling_seq += 1
+        
         yield row_dict.items()
         
         row_dict = {
@@ -291,6 +299,10 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
         }
         row_dict["eeg_signal"] = "2"
         row_dict["sleep_stage"] = sleep_stage
+        row_dict["sampling_seq"] = sampling_seq
+        
+        sampling_seq += 1
+        
         yield row_dict.items()
   
   def eeg_info_transformer(patient_eeg_info):
@@ -368,6 +380,7 @@ def main():
     cohort
     [eeg1_1 ... eeg1_batch_size] 
     [eeg2_1 ... eeg2_batch_size]
+    sampling_seq
     sleep_stage
   """
   
@@ -442,15 +455,15 @@ def main():
     profile(shhs_dir_path, settings)
     return
   
-  patient_info_generator, subject_ids = itertools.islice(
+  patient_info_generator = itertools.islice(
     get_patient_eeg(
       shhs_dir_path, 
       *get_patient_info(shhs_dir_path)
-    ), 
-    parsed.population_size
+    )[0](), 
+    settings.population_size
   )
   
-  column_names = ["subject_id", "in_cohort1", "in_cohort2", "cohort", "sleep_stage"]
+  column_names = ["subject_id", "in_cohort1", "in_cohort2", "cohort", "sampling_seq", "sleep_stage"]
   if settings.interspersed:
     column_names = column_names + [
       "eeg1_{0}".format(i)
@@ -468,8 +481,15 @@ def main():
   with open(settings.dump_path, 'w+') as csvfile:
     writer = csv.DictWriter(csvfile, fieldnames=column_names)
     writer.writeheader()
-    for patient_info in transform_to_dicts(settings, patient_info_generator):
-      print("Inserted row into CSV")
+    
+    last_subject_id = None
+    for patient_info in transform_to_dicts(settings, lambda: patient_info_generator):
+      if (patient_info.get('subject_id') != last_subject_id):
+        print("Inserting patient {0} fully into CSV".format(
+          patient_info.get('subject_id')
+        ))
+        last_subject_id = patient_info.get('subject_id')
+      
       writer.writerow(patient_info)
 
   
