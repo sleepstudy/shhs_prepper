@@ -1,6 +1,14 @@
 import argparse
 import os.path
 import itertools
+try:
+    from itertools import imap
+except ImportError:
+    imap = map
+try:
+    from itertools import izip
+except ImportError:
+    izip = zip
 from collections import namedtuple
 from xml.etree import ElementTree
 import math
@@ -185,7 +193,7 @@ def get_patient_eeg(shhs_dir_path, patient_info_generator, info_subject_ids):
       ) as reader_1:
         signal_1 = reader_1.readSignal(2)
         signal_2 = reader_1.readSignal(7)
-        cohort_1 = itertools.izip(signal_1, signal_2)
+        cohort_1 = izip(signal_1, signal_2)
         cohort_1_freq = (
           reader_1.getSampleFrequency(2),
           reader_1.getSampleFrequency(7)
@@ -205,7 +213,7 @@ def get_patient_eeg(shhs_dir_path, patient_info_generator, info_subject_ids):
       ) as reader_2:
         signal_1 = reader_2.readSignal(2)
         signal_2 = reader_2.readSignal(7)
-        cohort_2 = itertools.izip(signal_1, signal_2)
+        cohort_2 = izip(signal_1, signal_2)
         cohort_2_freq = (
           reader_2.getSampleFrequency(2),
           reader_2.getSampleFrequency(7)
@@ -257,8 +265,8 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
     ) if float(eeg_data_len) > 0 else 0
     
     eeg1_data, eeg2_data = itertools.tee(eeg_data, 2)
-    eeg1_data = itertools.imap(lambda x: x[0], eeg1_data)
-    eeg2_data = itertools.imap(lambda x: x[1], eeg2_data)
+    eeg1_data = imap(lambda x: x[0], eeg1_data)
+    eeg2_data = imap(lambda x: x[1], eeg2_data)
     
     for eeg_index in range(0, eeg_data_len, batch_size):
       sleep_stage = sleep_stages_data[
@@ -291,7 +299,7 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
         
         sampling_seq += 1
         
-        yield row_dict.items()
+        yield list(row_dict.items())
         
         row_dict = {
           "eeg_{0}".format(i): eeg
@@ -303,7 +311,7 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
         
         sampling_seq += 1
         
-        yield row_dict.items()
+        yield list(row_dict.items())
   
   def eeg_info_transformer(patient_eeg_info):
     iterables = []
@@ -314,7 +322,7 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
     ]
     
     if patient_eeg_info.eeg_cohort_1_present:
-      iterables.append(itertools.imap(
+      iterables.append(imap(
         lambda x: dict(x + dict_addons + [("cohort", "1")]), 
         eeg_generator(
           patient_eeg_info.eeg_cohort_1_data, 
@@ -326,7 +334,7 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
       ))
       
     if patient_eeg_info.eeg_cohort_2_present:
-      iterables.append(itertools.imap(
+      iterables.append(imap(
         lambda x: dict(x + dict_addons + [("cohort", "2")]), 
         eeg_generator(
           patient_eeg_info.eeg_cohort_2_data, 
@@ -340,7 +348,7 @@ def transform_to_dicts(settings, patient_eeg_info_generator):
     return itertools.chain.from_iterable(iterables)
   
   return itertools.chain.from_iterable(
-    itertools.imap(eeg_info_transformer, patient_eeg_info_generator())
+    imap(eeg_info_transformer, patient_eeg_info_generator())
   )
 
 
